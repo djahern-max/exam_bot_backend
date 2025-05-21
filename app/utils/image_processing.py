@@ -1,76 +1,93 @@
 import os
 import uuid
 from PIL import Image
-from io import BytesIO
-from typing import Optional, Tuple
+import io
+from typing import Optional, Tuple, BinaryIO
+
+# First, register the HEIF opener with Pillow
+try:
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+    HEIF_SUPPORT = True
+except ImportError:
+    HEIF_SUPPORT = False
+    print("Warning: pillow_heif not installed. HEIC files will not be supported.")
 
 
-def compress_image(image_bytes: bytes, max_size_mb: float = 1.0) -> bytes:
+def convert_heic_to_png(image_data: bytes) -> bytes:
     """
-    Compress an image to reduce its file size.
-    
+    Convert HEIC image data to PNG format.
+
     Args:
-        image_bytes: The original image bytes
-        max_size_mb: The maximum size in MB
-        
+        image_data: Binary image data
+
     Returns:
-        Compressed image bytes
+        Converted PNG image data
     """
-    # Convert bytes to image
-    img = Image.open(BytesIO(image_bytes))
-    
-    # Convert to RGB if mode is RGBA (removes alpha channel)
-    if img.mode == "RGBA":
-        img = img.convert("RGB")
-    
-    # Initial quality
-    quality = 85
-    output = BytesIO()
-    img.save(output, format="JPEG", quality=quality)
-    
-    # Check size and compress further if needed
-    max_size_bytes = max_size_mb * 1024 * 1024
-    while output.tell() > max_size_bytes and quality > 10:
-        quality -= 5
-        output = BytesIO()
-        img.save(output, format="JPEG", quality=quality)
-    
-    return output.getvalue()
+    try:
+        # Open the image from binary data
+        image = Image.open(io.BytesIO(image_data))
+
+        # Convert and save as PNG
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        output.seek(0)
+
+        return output.getvalue()
+    except Exception as e:
+        raise Exception(f"Error converting HEIC to PNG: {str(e)}")
 
 
-def save_uploaded_image(content: bytes, filename: Optional[str] = None, upload_dir: str = "uploads") -> Tuple[str, str]:
+def process_image_file(file: BinaryIO, original_filename: str) -> Tuple[str, bytes]:
     """
-    Save an uploaded image to disk.
-    
+    Process an uploaded image file, handling different formats including HEIC.
+
     Args:
-        content: The image content
-        filename: Original filename (optional)
+        file: The uploaded file object
+        original_filename: Original filename
+
+    Returns:
+        Tuple of (processed_content, file_extension)
+    """
+    file_content = file.read()
+    file_extension = os.path.splitext(original_filename)[1].lower()
+
+    # Handle HEIC files from iPhones
+    if file_extension in [".heic", ".heif"] and HEIF_SUPPORT:
+        print(f"Converting HEIC file to PNG: {original_filename}")
+        file_content = convert_heic_to_png(file_content)
+        file_extension = ".png"
+
+    return file_content, file_extension
+
+
+def save_uploaded_image(
+    file: BinaryIO, original_filename: str, upload_dir: str = "uploads"
+) -> str:
+    """
+    Save an uploaded image file, handling different formats including HEIC.
+
+    Args:
+        file: The uploaded file object
+        original_filename: Original filename
         upload_dir: Directory to save the image
-        
+
     Returns:
-        Tuple of (file_path, filename)
+        Path to the saved image file
     """
     # Create upload directory if it doesn't exist
     os.makedirs(upload_dir, exist_ok=True)
-    
-    # Generate a unique filename if not provided
-    if not filename:
-        ext = ".jpg"
-        filename = f"{uuid.uuid4()}{ext}"
-    else:
-        # Extract extension from filename
-        _, ext = os.path.splitext(filename)
-        # Generate a unique filename but keep the extension
-        filename = f"{uuid.uuid4()}{ext}"
-    
-    # Build the file path
+
+    # Process the file
+    file_content, file_extension = process_image_file(file, original_filename)
+
+    # Generate a unique filename
+    filename = f"{uuid.uuid4()}{file_extension}"
     file_path = os.path.join(upload_dir, filename)
-    
-    # Compress image if it's too large
-    compressed_content = compress_image(content)
-    
-    # Save the image
+
+    # Save the file
     with open(file_path, "wb") as f:
-        f.write(compressed_content)
-    
-    return file_path, filename
+        f.write(file_content)
+
+    return file_path
